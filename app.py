@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import pymunk
 from pymunk.vec2d import Vec2d
 import numpy as np
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import threading
 import time
 import math
@@ -72,7 +72,7 @@ Planets: List[Planet] = []
 
 
 class Node:
-    def __init__(self, pos: Vec2d = Vec2d(0, 0), max_force=node_max_force, group=0):
+    def __init__(self, pos: Vec2d = Vec2d(0, 0), max_force: float = node_max_force, group: int = 0):
         self.radius = node_radius
         moment = pymunk.moment_for_circle(mass=node_mass, inner_radius=0, outer_radius=self.radius)
         self.body = pymunk.Body(mass=node_mass, moment=moment)
@@ -88,16 +88,16 @@ class Node:
         self.max_force = max_force
 
 
-class Engine:
+class Engine(Node):
     def __init__(
         self,
         pos: Vec2d = Vec2d(0, 0),
-        max_force=engi_max_force,
+        max_force: float = engi_max_force,
         rotation: float = 0.0,
         force: float = 0.0,
         radius: float = engi_radius,
         mass: float = engi_mass,
-        group=0,
+        group: int = 0,
     ):
         self.radius = radius
         moment = pymunk.moment_for_circle(mass=mass, inner_radius=0, outer_radius=self.radius)
@@ -117,7 +117,7 @@ class Engine:
 
 
 class Plank:
-    def __init__(self, obj_a, obj_b, thickness: float = plank_radius):
+    def __init__(self, obj_a: Node, obj_b: Node, thickness: float = plank_radius):
         self.obj_a = obj_a
         self.obj_b = obj_b
 
@@ -154,7 +154,7 @@ class Plank:
 
         space.add(self.body, self.shape)
 
-        joints = []
+        joints: list[pymunk.Constraint] = []
 
         world_anchor1 = p1
         world_anchor2 = p2
@@ -186,7 +186,7 @@ class Plank:
 class Ship:
     uid_counter = 0
 
-    def __init__(self, pos=(0, 0), owner_uid: str = ""):
+    def __init__(self, pos: tuple[float, float] = (0, 0), owner_uid: str = ""):
         Ship.uid_counter += 1
         self.id = Ship.uid_counter
         self.owner_uid = owner_uid
@@ -366,7 +366,7 @@ def Physics_loop():
             time.sleep(T - now)
 
 # ------------------------------
-# 世界初始化：一个星球（不再默认生成一艘船）
+# 世界初始化：一个星球
 # ------------------------------
 def init_world():
     planet_R = 20000.0
@@ -441,7 +441,7 @@ def api_join():
 @app.route("/api/state", methods=["GET"])
 def api_state():
     with state_lock:
-        planets_json = []
+        planets_json: list[dict[str, Any]] = []
         for p in Planets:
             planets_json.append({
                 "name": p.name,
@@ -450,9 +450,9 @@ def api_state():
                 "radius": float(p.radius),
             })
 
-        ships_json = []
+        ships_json: list[dict[str, Any]] = []
         for s in Ships:
-            nodes_json = []
+            nodes_json: list[dict[str, Any]] = []
             for idx, n in enumerate(s.nodes):
                 nodes_json.append({
                     "id": idx,
@@ -465,7 +465,7 @@ def api_state():
                     "radius": float(n.radius),
                 })
 
-            engis_json = []
+            engis_json: list[dict[str, Any]] = []
             for e in s.engis:
                 engis_json.append({
                     "x": float(e.body.position.x),
@@ -477,7 +477,7 @@ def api_state():
                     "radius": float(e.radius),
                 })
 
-            planks_json = []
+            planks_json: list[dict[str, Any]] = []
             for pl in s.planks:
                 planks_json.append({
                     "x": float(pl.body.position.x),
@@ -511,7 +511,7 @@ def api_control():
     { uid, fire, left, right, stabilize }
     只控制自己的船
     """
-    data = request.get_json(force=True) or {}
+    data: dict[str, Any] = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
     if not uid:
         return jsonify({"ok": False, "error": "uid required"}), 400
@@ -545,14 +545,14 @@ def api_build_plank():
     """
     要求 uid，只能改自己的船
     """
-    data = request.get_json(force=True) or {}
+    data: dict[str, Any] = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
     if not uid:
         return jsonify({"ok": False, "error": "uid required"}), 400
 
     ship_id = int(data.get("ship_id", 0))
 
-    def get_obj(ship: Ship, ref: dict):
+    def get_obj(ship: Ship, ref: dict[str, Any]):
         t = (ref.get("type") or "node").lower()
         idx = int(ref.get("index", -1))
         if t == "node":
@@ -570,21 +570,21 @@ def api_build_plank():
         if ship is None or ship.id != ship_id:
             return jsonify({"ok": False, "error": "permission denied"}), 403
 
-        from_ref = data.get("from", None)
+        from_ref: dict[str, Any] | None = data.get("from", None)
         if from_ref is None:
             from_ref = {"type": "node", "index": int(data.get("from_node", -1))}
 
         obj_a, err = get_obj(ship, from_ref)
-        if err:
+        if err or obj_a is None:
             return jsonify({"ok": False, "error": f"from: {err}"}), 400
 
-        new_node_json = None
+        new_node_json: dict[str, Any] | None = None
         to_ref = data.get("to", None)
         to_node_compat = int(data.get("to_node", 999999))
 
         if to_ref is not None:
             obj_b, err = get_obj(ship, to_ref)
-            if err:
+            if err or obj_b is None:
                 return jsonify({"ok": False, "error": f"to: {err}"}), 400
         else:
             if to_node_compat == -1:
@@ -609,7 +609,7 @@ def api_build_plank():
                 }
             else:
                 obj_b, err = get_obj(ship, {"type": "node", "index": int(data.get("to_node", -1))})
-                if err:
+                if err or obj_b is None:
                     return jsonify({"ok": False, "error": f"to: {err}"}), 400
 
         if obj_a is obj_b:
@@ -640,14 +640,14 @@ def api_build_engine():
     JSON:
     { uid, ship_id, from_node, target:{x,y} }
     """
-    data = request.get_json(force=True) or {}
+    data: dict[str, Any] = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
     if not uid:
         return jsonify({"ok": False, "error": "uid required"}), 400
 
     ship_id = int(data.get("ship_id", 0))
     from_idx = int(data.get("from_node", -1))
-    target = data.get("target") or {}
+    target: dict[str, Any] = data.get("target") or {}
     tx = float(target.get("x", 0.0))
     ty = float(target.get("y", 0.0))
 
@@ -722,17 +722,17 @@ def api_delete():
     要求 uid，只能删自己的船
     { uid, ship_id, target:{type, index} }
     """
-    data = request.get_json(force=True) or {}
+    data: dict[str, Any] = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
     if not uid:
         return jsonify({"ok": False, "error": "uid required"}), 400
 
     ship_id = int(data.get("ship_id", 0))
-    target = data.get("target") or {}
+    target: dict[str, Any] = data.get("target") or {}
     ttype = str(target.get("type", "")).lower()
     idx = int(target.get("index", -1))
 
-    def safe_remove(obj):
+    def safe_remove(obj: pymunk.Body | pymunk.Shape | pymunk.Constraint | None):
         if obj is None:
             return
         try:
@@ -815,7 +815,7 @@ def api_predict():
       - "ballistic" / "ballistic_fast": 默认使用轻量预测
       - "current": 你如果以后要加推力预测再说（这里先当 ballistic 处理）
     """
-    data = request.get_json(force=True) or {}
+    data: dict[str, Any] = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
     if not uid:
         return jsonify({"ok": False, "error": "uid required"}), 400
@@ -840,7 +840,7 @@ def api_predict():
         core_vel = (float(core.velocity.x), float(core.velocity.y))
 
         # 行星快照（质量/半径/位置/速度）
-        planets = []
+        planets: list[dict[str, Any]] = []
         for p in Planets:
             planets.append({
                 "name": p.name,
@@ -864,10 +864,10 @@ def api_predict():
     if est_pts > max_pts:
         stride = max(1, int(math.ceil(steps / (max_pts - 1))))
 
-    def planet_planet_acc(i):
+    def planet_planet_acc(i: int):
         """返回第 i 颗行星受到其他行星引力产生的加速度 (ax, ay)"""
         xi, yi = planets[i]["pos"]
-        mi = planets[i]["mass"]
+        # mi = planets[i]["mass"]
         ax = ay = 0.0
         for j in range(len(planets)):
             if j == i:
@@ -886,7 +886,7 @@ def api_predict():
             ay += dy * a
         return ax, ay
 
-    def ship_acc_from_planets(x, y):
+    def ship_acc_from_planets(x: float, y: float):
         """core 在 (x,y) 处受到行星引力的加速度 (ax, ay)，用 eff_r=max(dist,R) 做软化"""
         ax = ay = 0.0
         for pl in planets:
@@ -909,7 +909,7 @@ def api_predict():
     sx, sy = core_pos
     svx, svy = core_vel
 
-    points = []
+    points: list[dict[str, float]] = []
     for step in range(steps + 1):
         if step % stride == 0:
             points.append({"x": float(sx), "y": float(sy)})
