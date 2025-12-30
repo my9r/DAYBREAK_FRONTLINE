@@ -44,7 +44,7 @@ att_kp = 8
 att_kd = 6
 MAX_ATT_TORQUE = 6e6
 
-Fixed_fps = 60
+Fixed_fps = 120
 
 # ------------------------------
 # 全局锁
@@ -375,9 +375,9 @@ def init_world():
     earth = Planet(mass=planet_M, R=planet_R, name="home")
     Planets.append(earth)
 
-    E2R_Moon=5e4
-    R_Moon=5e3
-    g_Moon=1.625
+    E2R_Moon=2e5
+    R_Moon=6.5e3
+    g_Moon=4.5
 
     Moon_M=g_Moon*R_Moon**2/G
     moon = Planet(mass=Moon_M, R=R_Moon, name="moon")
