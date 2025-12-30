@@ -73,11 +73,12 @@ Planets: List[Planet] = []
 
 
 class Node:
-    def __init__(self, pos: Vec2d = Vec2d(0, 0), max_force: float = node_max_force, group: int = 0):
+    def __init__(self, pos: Vec2d = Vec2d(0, 0), vel: Vec2d = Vec2d(0, 0), max_force: float = node_max_force, group: int = 0):
         self.radius = node_radius
         moment = pymunk.moment_for_circle(mass=node_mass, inner_radius=0, outer_radius=self.radius)
         self.body = pymunk.Body(mass=node_mass, moment=moment)
         self.body.position = pos
+        self.body.velocity = vel
 
         shape = pymunk.Circle(self.body, self.radius)
         shape.friction = 0.5
@@ -93,6 +94,7 @@ class Engine(Node):
     def __init__(
         self,
         pos: Vec2d = Vec2d(0, 0),
+        vel: Vec2d = Vec2d(0, 0),
         max_force: float = engi_max_force,
         rotation: float = 0.0,
         force: float = 0.0,
@@ -104,6 +106,7 @@ class Engine(Node):
         moment = pymunk.moment_for_circle(mass=mass, inner_radius=0, outer_radius=self.radius)
         self.body = pymunk.Body(mass=mass, moment=moment)
         self.body.position = pos
+        self.body.velocity = vel
         self.body.angle = rotation
 
         shape = pymunk.Circle(self.body, self.radius)
@@ -145,6 +148,7 @@ class Plank:
 
         self.body = pymunk.Body(mass, moment)
         self.body.position = mid
+        self.body.velocity = (body_a.velocity + body_b.velocity) / 2
         self.body.angle = angle
 
         self.shape = pymunk.Segment(self.body, a_local, b_local, self.radius)
@@ -187,12 +191,12 @@ class Plank:
 class Ship:
     uid_counter = 0
 
-    def __init__(self, pos: tuple[float, float] = (0, 0), owner_uid: str = ""):
+    def __init__(self, pos: Vec2d = Vec2d(0, 0), vel: Vec2d = Vec2d(0, 0), owner_uid: str = ""):
         Ship.uid_counter += 1
         self.id = Ship.uid_counter
         self.owner_uid = owner_uid
 
-        self.nodes: List[Node] = [Node(pos=Vec2d(*pos), max_force=core_max_force, group=self.id)]
+        self.nodes: List[Node] = [Node(pos=pos, vel=vel, max_force=core_max_force, group=self.id)]
         self.engis: List[Engine] = []
         self.planks: List[Plank] = []
 
@@ -203,7 +207,6 @@ class Ship:
         self.stabilize = False
         self.stable_angle = 0.0
 
-        # 多人关键：每艘船自己的“上一次 ship_angle”，别用全局变量
         self.last_ship_angle = 0.0
 
     @property
@@ -383,7 +386,7 @@ def init_world():
     Moon_M = g_Moon * R_Moon**2 / G
     moon = Planet(mass=Moon_M, R=R_Moon, name="moon")
     Planets.append(moon)
-    omega = np.sqrt(G * (planet_M + Moon_M) / (E2R_Moon ** 3))
+    omega: float = np.sqrt(G * (planet_M + Moon_M) / (E2R_Moon ** 3))
     v = omega * E2R_Moon
     moon.body.position = (E2R_Moon, 0)
     moon.body.velocity = (0, v)
@@ -398,14 +401,14 @@ def create_ship_for_player(owner_uid: str) -> Ship:
     theta = random.random() * 2 * math.pi
     u = Vec2d(math.cos(theta), math.sin(theta))  # 径向单位向量
 
-    ship = Ship(pos=planet.body.position + u * (R + start_alt), owner_uid=owner_uid)
+    ship = Ship(pos=planet.body.position + u * (R + start_alt), vel=planet.body.velocity, owner_uid=owner_uid)
 
     core = ship.core
     # 引擎放在“靠近星球”方向（core 往 -u）
     eng_pos = core.body.position - u * 10.0
 
     # 让引擎角度=飞船朝向（指向 +u），这样前端画出来推力方向好看
-    eng = Engine(pos=eng_pos, rotation=u.angle, group=ship.id)
+    eng = Engine(pos=eng_pos, vel=core.body.velocity, rotation=u.angle, group=ship.id)
     ship.engis.append(eng)
     ship.planks.append(Plank(core, eng))
 
