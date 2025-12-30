@@ -713,7 +713,7 @@
                 const colPlank = isMine ? "#888" : "#444";
                 const colNode  = isMine ? "#0ff" : "#066";
                 const colEng   = isMine ? "#f0f" : "#606";
-                const colArrow = isMine ? "#0f0" : "#070";
+                const colArrow = isMine ? "#0f0" : "#0000";
 
                 // planks
                 (ship.planks || []).forEach((pl, pi) => {
@@ -819,7 +819,7 @@
                 if (ship.nodes && ship.nodes.length > 0 && typeof ship.ship_angle === "number") {
                     const coreP = predictPose(ship.nodes[0], nowSec);
                     const ang = ship.ship_angle;
-                    const L = 30;
+                    const L = 12 / cameraZoom;
 
                     const ex = coreP.x + Math.cos(ang) * L;
                     const ey = coreP.y + Math.sin(ang) * L;
@@ -831,7 +831,7 @@
                     ctx.lineTo(ex, ey);
                     ctx.stroke();
 
-                    const headLen = 5;
+                    const headLen = 3 / cameraZoom;
                     const leftAng = ang + Math.PI * 0.75;
                     const rightAng = ang - Math.PI * 0.75;
                     ctx.beginPath();
