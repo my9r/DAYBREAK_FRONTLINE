@@ -447,6 +447,8 @@ def api_state():
                 "name": p.name,
                 "x": float(p.body.position.x),
                 "y": float(p.body.position.y),
+                "vx": float(p.body.velocity.x),
+                "vy": float(p.body.velocity.y),
                 "radius": float(p.radius),
             })
 
@@ -884,6 +886,8 @@ def api_predict():
             if r2 < 1e-12:
                 continue
             r = math.sqrt(r2)
+            if r < planets[j]["radius"]:
+                raise RuntimeError("planet collision in prediction!")
             inv_r3 = 1.0 / (r2 * r)
             a = G0 * mj * inv_r3
             ax += dx * a
@@ -933,7 +937,10 @@ def api_predict():
             planets[i]["pos"][1] += planets[i]["vel"][1] * dt
 
         # 2) 飞船 core 在行星引力下动
-        ax, ay = ship_acc_from_planets(sx, sy)
+        try:
+            ax, ay = ship_acc_from_planets(sx, sy)
+        except RuntimeError:
+            break
         svx += ax * dt
         svy += ay * dt
         sx += svx * dt
