@@ -235,7 +235,14 @@
         }
 
         function getCameraCenter(nowSec) {
-            return freeCamera ? freeCamPos : getFollowCenter(nowSec);
+            if (freeCamera) {
+                const p = planetPosition(worldState.planets[worldPivot], nowSec - lastStateArrivedAt);
+                return {
+                    x: p.x + freeCamPos.x,
+                    y: p.y + freeCamPos.y
+                };
+            }
+            return getFollowCenter(nowSec);
         }
 
         function applyCameraTransform(nowSec) {
@@ -526,8 +533,9 @@
                     if (freeCamera) {
                         const nowSec = performance.now() / 1000;
                         const c = getFollowCenter(nowSec);
-                        freeCamPos.x = c.x;
-                        freeCamPos.y = c.y;
+                        const p = planetPosition(worldState.planets[worldPivot]);
+                        freeCamPos.x = c.x - p.x;
+                        freeCamPos.y = c.y - p.y;
                     }
                     break;
 
