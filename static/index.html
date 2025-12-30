@@ -49,7 +49,7 @@
 
         自由视角：
             Tab：切换自由相机（开启后 WASD 移动相机）
-            轨迹预测：/api/predict（默认 ballistic）
+            - / =：切换行星参考系
     </div>
 
     <canvas id="gameCanvas"></canvas>
@@ -501,7 +501,8 @@
 
                 ctx.beginPath();
                 ctx.moveTo(pivotPoint.x + predictedPoints[i].x, pivotPoint.y + predictedPoints[i].y);
-                for (let j = i + 1; j <= jEnd; j++) ctx.lineTo(pivotPoint.x + predictedPoints[j].x, pivotPoint.y + predictedPoints[j].y);
+                for (let j = i + 1; j <= jEnd; j++) 
+                    ctx.lineTo(pivotPoint.x + predictedPoints[j].x, pivotPoint.y + predictedPoints[j].y);
                 ctx.stroke();
             }
             ctx.restore();
@@ -568,13 +569,23 @@
                     break;
 
                 case "Minus":
+                    freeCamPos.x += worldState.planets[worldPivot].x;
+                    freeCamPos.y += worldState.planets[worldPivot].y;
                     if (--worldPivot < 0)
                         worldPivot += worldState.planets.length;
+                    freeCamPos.x -= worldState.planets[worldPivot].x;
+                    freeCamPos.y -= worldState.planets[worldPivot].y;
+                    predictedPoints = [];
                     break;
 
                 case "Equal":
+                    freeCamPos.x += worldState.planets[worldPivot].x;
+                    freeCamPos.y += worldState.planets[worldPivot].y;
                     if (++worldPivot >= worldState.planets.length)
                         worldPivot -= worldState.planets.length;
+                    freeCamPos.x -= worldState.planets[worldPivot].x;
+                    freeCamPos.y -= worldState.planets[worldPivot].y;
+                    predictedPoints = [];
                     break;
             }
         });
@@ -703,16 +714,16 @@
         function drawWorld(nowSec) {
             applyCameraTransform(nowSec);
 
-            drawPredictedTrajectory();
-
             // 行星
             for (const p of (worldState.planets || [])) {
                 const p1 = planetPosition(p);
-                ctx.fillStyle = "#222";
+                ctx.fillStyle = p.color;
                 ctx.beginPath();
                 ctx.arc(p1.x, p1.y, p.radius, 0, Math.PI * 2);
                 ctx.fill();
             }
+
+            drawPredictedTrajectory();
 
             // 所有飞船都画出来：我的亮，别人的暗
             (worldState.ships || []).forEach((ship) => {
@@ -721,7 +732,7 @@
                 const colPlank = isMine ? "#888" : "#444";
                 const colNode  = isMine ? "#0ff" : "#066";
                 const colEng   = isMine ? "#f0f" : "#606";
-                const colArrow = isMine ? "#0f0" : "#0000";
+                const colArrow = isMine ? "#0f0" : "#0f03";
 
                 // planks
                 (ship.planks || []).forEach((pl, pi) => {
@@ -914,6 +925,8 @@
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.font = "14px monospace";
             ctx.fillStyle = "#0f0";
+
+            ctx.fillText(`pivot: ${worldPivot} (${worldState.planets[worldPivot]?.name})`, 10, H - 118);
 
             ctx.fillText(`uid: ${myUid ? myUid.slice(0, 8) + "..." : "(joining)"}  ship_id: ${myShipId ?? "-"}`, 10, H - 100);
 

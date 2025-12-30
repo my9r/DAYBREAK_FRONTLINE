@@ -55,9 +55,10 @@ state_lock = threading.Lock()
 # 实体类
 # ------------------------------
 class Planet:
-    def __init__(self, mass: float, R: float, name: str = "planet"):
+    def __init__(self, mass: float, R: float, name: str = "planet", color: str = "#222"):
         self.name = name
         self.radius = R
+        self.color = color
         moment = pymunk.moment_for_circle(mass=mass, inner_radius=0, outer_radius=R)
         self.body = pymunk.Body(mass=mass, moment=moment)
         self.body.position = (0, 0)
@@ -366,26 +367,26 @@ def Physics_loop():
             time.sleep(T - now)
 
 # ------------------------------
-# 世界初始化：一个星球
+# 世界初始化：一个星球 + 一颗卫星
 # ------------------------------
 def init_world():
     planet_R = 20000.0
     planet_g = 9.8
     planet_M = planet_g * planet_R**2 / G
-    earth = Planet(mass=planet_M, R=planet_R, name="home")
+    earth = Planet(mass=planet_M, R=planet_R, name="home", color="#11222a")
     Planets.append(earth)
 
     E2R_Moon=2e5
     R_Moon=6.5e3
     g_Moon=4.5
 
-    Moon_M=g_Moon*R_Moon**2/G
+    Moon_M = g_Moon * R_Moon**2 / G
     moon = Planet(mass=Moon_M, R=R_Moon, name="moon")
     Planets.append(moon)
     omega = np.sqrt(G * (planet_M + Moon_M) / (E2R_Moon ** 3))
-    v=omega * E2R_Moon
-    moon.body.position=(E2R_Moon, 0)
-    moon.body.velocity=(0, v)
+    v = omega * E2R_Moon
+    moon.body.position = (E2R_Moon, 0)
+    moon.body.velocity = (0, v)
 
 
 def create_ship_for_player(owner_uid: str) -> Ship:
@@ -397,8 +398,7 @@ def create_ship_for_player(owner_uid: str) -> Ship:
     theta = random.random() * 2 * math.pi
     u = Vec2d(math.cos(theta), math.sin(theta))  # 径向单位向量
 
-    core_pos = u * (R + start_alt)
-    ship = Ship(pos=(core_pos.x, core_pos.y), owner_uid=owner_uid)
+    ship = Ship(pos=planet.body.position + u * (R + start_alt), owner_uid=owner_uid)
 
     core = ship.core
     # 引擎放在“靠近星球”方向（core 往 -u）
@@ -445,6 +445,7 @@ def api_state():
         for p in Planets:
             planets_json.append({
                 "name": p.name,
+                "color": p.color,
                 "x": float(p.body.position.x),
                 "y": float(p.body.position.y),
                 "vx": float(p.body.velocity.x),
