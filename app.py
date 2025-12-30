@@ -375,6 +375,19 @@ def init_world():
     earth = Planet(mass=planet_M, R=planet_R, name="home")
     Planets.append(earth)
 
+    E2R_Moon=5e4
+    R_Moon=5e3
+    g_Moon=1.625
+
+    Moon_M=g_Moon*R_Moon**2/G
+    moon = Planet(mass=Moon_M, R=R_Moon, name="moon")
+    Planets.append(moon)
+    omega=np.sqrt(G*(planet_M+Moon_M)/(E2R_Moon**3))
+    v=omega*E2R_Moon
+    moon.body.position=(E2R_Moon,0)
+    moon.body.velocity=(0,v)
+
+
 def create_ship_for_player(owner_uid: str) -> Ship:
     # 在星球表面随机角度生成
     planet = Planets[0]
@@ -796,7 +809,11 @@ def api_delete():
 @app.route("/api/predict", methods=["POST"])
 def api_predict():
     """
+    超轻量预测：只考虑“自己飞船的 core”和“行星引力”
     { uid, ship_id, seconds, dt, mode, stride }
+    mode:
+      - "ballistic" / "ballistic_fast": 默认使用轻量预测
+      - "current": 你如果以后要加推力预测再说（这里先当 ballistic 处理）
     """
     data = request.get_json(force=True) or {}
     uid = str(data.get("uid", "")).strip()
@@ -811,307 +828,113 @@ def api_predict():
     if stride < 1:
         stride = 1
 
+    # --- 在锁内：只抓“最少必需快照” ---
     with state_lock:
         ship = get_ship_by_uid(uid)
         if ship is None or ship.id != req_ship_id:
             return jsonify({"ok": False, "error": "permission denied"}), 403
 
-        planets_snap = []
+        # core 的状态（只要它）
+        core = ship.core.body
+        core_pos = (float(core.position.x), float(core.position.y))
+        core_vel = (float(core.velocity.x), float(core.velocity.y))
+
+        # 行星快照（质量/半径/位置/速度）
+        planets = []
         for p in Planets:
-            planets_snap.append({
+            planets.append({
                 "name": p.name,
                 "mass": float(p.body.mass),
                 "radius": float(p.radius),
-                "pos": (float(p.body.position.x), float(p.body.position.y)),
-                "vel": (float(p.body.velocity.x), float(p.body.velocity.y)),
-                "angle": float(p.body.angle),
-                "ang_vel": float(p.body.angular_velocity),
+                "pos": [float(p.body.position.x), float(p.body.position.y)],
+                "vel": [float(p.body.velocity.x), float(p.body.velocity.y)],
             })
 
-        nodes_snap = []
-        for n in ship.nodes:
-            nodes_snap.append({
-                "mass": float(n.body.mass),
-                "moment": float(n.body.moment),
-                "radius": float(n.radius),
-                "pos": (float(n.body.position.x), float(n.body.position.y)),
-                "vel": (float(n.body.velocity.x), float(n.body.velocity.y)),
-                "angle": float(n.body.angle),
-                "ang_vel": float(n.body.angular_velocity),
-                "group": int(n.shape.filter.group),
-            })
+    # --- 锁外：轻量积分 ---
+    G0 = float(G)
 
-        engs_snap = []
-        for e in ship.engis:
-            engs_snap.append({
-                "mass": float(e.body.mass),
-                "moment": float(e.body.moment),
-                "radius": float(e.radius),
-                "pos": (float(e.body.position.x), float(e.body.position.y)),
-                "vel": (float(e.body.velocity.x), float(e.body.velocity.y)),
-                "angle": float(e.body.angle),
-                "ang_vel": float(e.body.angular_velocity),
-                "group": int(e.shape.filter.group),
-            })
-
-        node_id2idx = {id(obj): i for i, obj in enumerate(ship.nodes)}
-        eng_id2idx  = {id(obj): i for i, obj in enumerate(ship.engis)}
-
-        planks_snap = []
-        for pl in ship.planks:
-            a_kind, a_idx = None, None
-            b_kind, b_idx = None, None
-
-            if id(pl.obj_a) in node_id2idx:
-                a_kind, a_idx = "node", node_id2idx[id(pl.obj_a)]
-            elif id(pl.obj_a) in eng_id2idx:
-                a_kind, a_idx = "engine", eng_id2idx[id(pl.obj_a)]
-
-            if id(pl.obj_b) in node_id2idx:
-                b_kind, b_idx = "node", node_id2idx[id(pl.obj_b)]
-            elif id(pl.obj_b) in eng_id2idx:
-                b_kind, b_idx = "engine", eng_id2idx[id(pl.obj_b)]
-
-            planks_snap.append({
-                "mass": float(pl.body.mass),
-                "moment": float(pl.body.moment),
-                "radius": float(pl.radius),
-                "length": float(pl.length),
-                "pos": (float(pl.body.position.x), float(pl.body.position.y)),
-                "vel": (float(pl.body.velocity.x), float(pl.body.velocity.y)),
-                "angle": float(pl.body.angle),
-                "ang_vel": float(pl.body.angular_velocity),
-                "group": int(pl.shape.filter.group),
-
-                "a": {"kind": a_kind, "idx": a_idx},
-                "b": {"kind": b_kind, "idx": b_idx},
-
-                "pivot_a": {
-                    "anchor_a": (float(pl.pivot_a.anchor_a.x), float(pl.pivot_a.anchor_a.y)),
-                    "anchor_b": (float(pl.pivot_a.anchor_b.x), float(pl.pivot_a.anchor_b.y)),
-                },
-                "pivot_b": {
-                    "anchor_a": (float(pl.pivot_b.anchor_a.x), float(pl.pivot_b.anchor_a.y)),
-                    "anchor_b": (float(pl.pivot_b.anchor_b.x), float(pl.pivot_b.anchor_b.y)),
-                },
-                "spring_a": {
-                    "rest_angle": float(pl.spring_a.rest_angle),
-                    "stiffness": float(pl.spring_a.stiffness),
-                    "damping": float(pl.spring_a.damping),
-                },
-                "spring_b": {
-                    "rest_angle": float(pl.spring_b.rest_angle),
-                    "stiffness": float(pl.spring_b.stiffness),
-                    "damping": float(pl.spring_b.damping),
-                },
-            })
-
-        ship_control = {
-            "on_fire": bool(ship.on_fire),
-            "on_left": bool(ship.on_left),
-            "on_right": bool(ship.on_right),
-            "stabilize": bool(ship.stabilize),
-            "stable_angle": float(ship.stable_angle),
-        }
-
-        world_params = {
-            "G": float(G),
-            "damping": float(space.damping),
-            "iterations": int(space.iterations),
-            "engi_force_k": float(engi_force_k),
-            "turn_angle_speed": float(turn_angle_speed),
-            "att_kp": float(att_kp),
-            "att_kd": float(att_kd),
-            "MAX_ATT_TORQUE": float(MAX_ATT_TORQUE),
-        }
-
-    # ---- 锁外：预测空间 ----
-    pred_space = pymunk.Space()
-    pred_space.gravity = (0, 0)
-    pred_space.damping = world_params["damping"]
-    pred_space.iterations = world_params["iterations"]
-
-    pred_planets = []
-    for ps in planets_snap:
-        body = pymunk.Body(mass=ps["mass"], moment=pymunk.moment_for_circle(ps["mass"], 0, ps["radius"]))
-        body.position = ps["pos"]
-        body.velocity = ps["vel"]
-        body.angle = ps["angle"]
-        body.angular_velocity = ps["ang_vel"]
-        shape = pymunk.Circle(body, ps["radius"])
-        shape.friction = 0.5
-        shape.elasticity = 0.0
-        pred_space.add(body, shape)
-        pred_planets.append({"body": body, "radius": ps["radius"], "mass": ps["mass"]})
-
-    pred_nodes = []
-    for ns in nodes_snap:
-        body = pymunk.Body(mass=ns["mass"], moment=ns["moment"])
-        body.position = ns["pos"]
-        body.velocity = ns["vel"]
-        body.angle = ns["angle"]
-        body.angular_velocity = ns["ang_vel"]
-        shape = pymunk.Circle(body, ns["radius"])
-        shape.friction = 0.5
-        shape.elasticity = 0.0
-        shape.filter = pymunk.ShapeFilter(group=ns["group"])
-        pred_space.add(body, shape)
-        pred_nodes.append({"body": body, "radius": ns["radius"], "mass": ns["mass"], "shape": shape})
-
-    pred_engs = []
-    for es in engs_snap:
-        body = pymunk.Body(mass=es["mass"], moment=es["moment"])
-        body.position = es["pos"]
-        body.velocity = es["vel"]
-        body.angle = es["angle"]
-        body.angular_velocity = es["ang_vel"]
-        shape = pymunk.Circle(body, es["radius"])
-        shape.friction = 0.5
-        shape.elasticity = 0.0
-        shape.filter = pymunk.ShapeFilter(group=es["group"])
-        pred_space.add(body, shape)
-        pred_engs.append({"body": body, "radius": es["radius"], "mass": es["mass"], "shape": shape})
-
-    def resolve_endpoint(ep):
-        if not ep or ep["kind"] is None:
-            return None
-        if ep["kind"] == "node":
-            return pred_nodes[ep["idx"]]["body"]
-        if ep["kind"] == "engine":
-            return pred_engs[ep["idx"]]["body"]
-        return None
-
-    pred_planks = []
-    for pls in planks_snap:
-        body = pymunk.Body(mass=pls["mass"], moment=pls["moment"])
-        body.position = pls["pos"]
-        body.velocity = pls["vel"]
-        body.angle = pls["angle"]
-        body.angular_velocity = pls["ang_vel"]
-
-        half_len = pls["length"] / 2.0
-        a_local = Vec2d(-half_len, 0.0)
-        b_local = Vec2d( half_len, 0.0)
-        shape = pymunk.Segment(body, a_local, b_local, pls["radius"])
-        shape.friction = 0.5
-        shape.elasticity = 0.0
-        shape.filter = pymunk.ShapeFilter(group=pls["group"])
-        pred_space.add(body, shape)
-
-        body_a = resolve_endpoint(pls["a"])
-        body_b = resolve_endpoint(pls["b"])
-        if body_a is None or body_b is None:
-            continue
-
-        pivot_a = pymunk.PivotJoint(body, body_a, Vec2d(*pls["pivot_a"]["anchor_a"]), Vec2d(*pls["pivot_a"]["anchor_b"]))
-        pivot_b = pymunk.PivotJoint(body, body_b, Vec2d(*pls["pivot_b"]["anchor_a"]), Vec2d(*pls["pivot_b"]["anchor_b"]))
-        spring_a = pymunk.DampedRotarySpring(body, body_a, pls["spring_a"]["rest_angle"], pls["spring_a"]["stiffness"], pls["spring_a"]["damping"])
-        spring_b = pymunk.DampedRotarySpring(body, body_b, pls["spring_b"]["rest_angle"], pls["spring_b"]["stiffness"], pls["spring_b"]["damping"])
-
-        pred_space.add(pivot_a, pivot_b, spring_a, spring_b)
-        pred_planks.append({"body": body})
-
-    G0 = world_params["G"]
-    include_control = (mode == "current")
-
-    def compute_ship_angle_pred():
-        core_pos = pred_nodes[0]["body"].position
-        if len(pred_engs) > 0:
-            center = Vec2d(0, 0)
-            for e in pred_engs:
-                center += e["body"].position
-            center /= len(pred_engs)
-            dir_vec = core_pos - center
-            if dir_vec.length > 1e-6:
-                return dir_vec.angle
-        return 0.0
-
-    def wrap_angle_local(a: float) -> float:
-        return (a + math.pi) % (2 * math.pi) - math.pi
-
-    last_angle_local = compute_ship_angle_pred()
-    stable_angle_local = ship_control["stable_angle"]
-
-    def all_ship_bodies():
-        return [n["body"] for n in pred_nodes] + [e["body"] for e in pred_engs] + [p["body"] for p in pred_planks]
-
+    # 保护一下输入，避免有人 seconds=1e9 来挖矿
+    seconds = max(1.0, min(seconds, 600.0))
+    dt = max(1.0/240.0, min(dt, 1.0/5.0))   # 过小过大都不划算
     steps = int(max(1, seconds / dt))
-    points = []
 
+    # 可选：对点数做硬上限，避免前端/网络爆炸
+    max_pts = 2000
+    est_pts = steps // stride + 1
+    if est_pts > max_pts:
+        stride = max(1, int(math.ceil(steps / (max_pts - 1))))
+
+    def planet_planet_acc(i):
+        """返回第 i 颗行星受到其他行星引力产生的加速度 (ax, ay)"""
+        xi, yi = planets[i]["pos"]
+        mi = planets[i]["mass"]
+        ax = ay = 0.0
+        for j in range(len(planets)):
+            if j == i:
+                continue
+            xj, yj = planets[j]["pos"]
+            mj = planets[j]["mass"]
+            dx = xj - xi
+            dy = yj - yi
+            r2 = dx*dx + dy*dy
+            if r2 < 1e-12:
+                continue
+            r = math.sqrt(r2)
+            inv_r3 = 1.0 / (r2 * r)
+            a = G0 * mj * inv_r3
+            ax += dx * a
+            ay += dy * a
+        return ax, ay
+
+    def ship_acc_from_planets(x, y):
+        """core 在 (x,y) 处受到行星引力的加速度 (ax, ay)，用 eff_r=max(dist,R) 做软化"""
+        ax = ay = 0.0
+        for pl in planets:
+            px, py = pl["pos"]
+            dx = px - x
+            dy = py - y
+            r2 = dx*dx + dy*dy
+            if r2 < 1e-12:
+                continue
+            r = math.sqrt(r2)
+            eff_r = max(r, pl["radius"])
+            eff_r2 = eff_r * eff_r
+            eff_r3 = eff_r2 * eff_r
+            a = G0 * pl["mass"] / eff_r3
+            ax += dx * a
+            ay += dy * a
+        return ax, ay
+
+    # 状态
+    sx, sy = core_pos
+    svx, svy = core_vel
+
+    points = []
     for step in range(steps + 1):
         if step % stride == 0:
-            core_p = pred_nodes[0]["body"].position
-            points.append({"x": float(core_p.x), "y": float(core_p.y)})
+            points.append({"x": float(sx), "y": float(sy)})
 
-        # planet-planet
-        npl = len(pred_planets)
-        for i in range(npl):
-            for j in range(i):
-                pi = pred_planets[i]
-                pj = pred_planets[j]
-                tow = pj["body"].position - pi["body"].position
-                dist = tow.length
-                if dist <= 1e-6:
-                    continue
-                dir_vec = tow / dist
-                mag = G0 * pi["mass"] * pj["mass"] / (dist ** 2)
-                force = dir_vec * mag
-                pi["body"].apply_force_at_world_point(force, pi["body"].position)
-                pj["body"].apply_force_at_world_point(-force, pj["body"].position)
+        # 1) 行星自己动（如果你不想要月球跑，就把这段注释掉）
+        # 半隐式：v += a*dt; x += v*dt
+        # 行星数量通常很少，这点开销几乎等于 0
+        p_acc = [planet_planet_acc(i) for i in range(len(planets))]
+        for i, (ax, ay) in enumerate(p_acc):
+            planets[i]["vel"][0] += ax * dt
+            planets[i]["vel"][1] += ay * dt
+        for i in range(len(planets)):
+            planets[i]["pos"][0] += planets[i]["vel"][0] * dt
+            planets[i]["pos"][1] += planets[i]["vel"][1] * dt
 
-        # planet-ship
-        for planet in pred_planets:
-            R = planet["radius"]
-            M = planet["mass"]
-            for b in all_ship_bodies():
-                r_vec = planet["body"].position - b.position
-                dist = r_vec.length
-                if dist <= 1e-6:
-                    continue
-                eff_r = max(dist, R)
-                dir_vec = r_vec / eff_r
-                g_mag = G0 * M / (eff_r ** 2)
-                force = dir_vec * (b.mass * g_mag)
-                b.apply_force_at_world_point(force, b.position)
-
-        # optional control（你前端现在永远 ballistic，所以这里基本不会走）
-        if include_control:
-            core_body = pred_nodes[0]["body"]
-            ship_ang = compute_ship_angle_pred()
-
-            on_left = ship_control["on_left"]
-            on_right = ship_control["on_right"]
-            on_fire = ship_control["on_fire"]
-            stabilize = ship_control["stabilize"]
-
-            if stabilize:
-                if on_left:
-                    stable_angle_local += world_params["turn_angle_speed"] * dt
-                if on_right:
-                    stable_angle_local -= world_params["turn_angle_speed"] * dt
-
-                current_angle = ship_ang
-                angle_error = wrap_angle_local(stable_angle_local - current_angle)
-
-                delta = wrap_angle_local(current_angle - last_angle_local)
-                ang_vel = delta / dt if dt > 1e-9 else 0.0
-
-                torque = world_params["att_kp"] * angle_error - world_params["att_kd"] * ang_vel
-                torque = max(-world_params["MAX_ATT_TORQUE"], min(world_params["MAX_ATT_TORQUE"], torque))
-                core_body.torque += torque
-                last_angle_local = current_angle
-
-            if on_fire and len(pred_engs) > 0:
-                thrust_dir = Vec2d(math.cos(ship_ang), math.sin(ship_ang))
-                for e in pred_engs:
-                    force = thrust_dir * (e["body"].mass * world_params["engi_force_k"])
-                    e["body"].apply_force_at_world_point(force, e["body"].position)
-
-        pred_space.step(dt)
+        # 2) 飞船 core 在行星引力下动
+        ax, ay = ship_acc_from_planets(sx, sy)
+        svx += ax * dt
+        svy += ay * dt
+        sx += svx * dt
+        sy += svy * dt
 
     return jsonify({
         "ok": True,
-        "ship_id": int(ship.id),
+        "ship_id": int(req_ship_id),
         "dt": dt,
         "seconds": seconds,
         "stride": stride,
