@@ -949,4 +949,4 @@ if __name__ == "__main__":
     init_world()
     t = threading.Thread(target=Physics_loop, daemon=True)
     t.start()
-    app.run(host="0.0.0.0", port=5050, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
