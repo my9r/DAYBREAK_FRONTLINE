@@ -49,9 +49,7 @@
 
     自由视角：
       Tab：切换自由相机（开启后 WASD 移动相机）
-      轨迹预测：从后端 /api/predict 拉取（真实模拟）
-        - 默认 ballistic（惯性预测）
-        - 按住 Space 时用 current（把持续点火/转向当作未来输入）
+      轨迹预测：/api/predict（默认 ballistic）
   </div>
 
   <canvas id="gameCanvas"></canvas>
@@ -63,7 +61,11 @@
     let myUid = null;
     let myShipId = null;
     let joined = false;
+
+    // 鼠标屏幕坐标（关键：相机在动时，也必须每帧用“当前相机中心”重算世界坐标）
     let mouseScreenPos = { x: 0, y: 0 };
+
+    // 后端 state 到达时间戳（用于前端外推预测）
     let lastStateArrivedAt = performance.now() / 1000;
 
     async function joinGame() {
@@ -75,13 +77,15 @@
       joined = true;
     }
 
+    let worldState = { planets: [], ships: [] };
+
     function getMyShip() {
       if (!worldState.ships) return null;
       return worldState.ships.find(s => s.id === myShipId) || null;
     }
 
     // ------------------------------
-    // 速度估计（基于我的核心）
+    // 速度估计（基于我的核心，用于预测秒数估计）
     // ------------------------------
     let coreVelEst = { vx: 0, vy: 0 };
     let lastCoreSample = null;
@@ -122,10 +126,13 @@
       CY = H / 2;
     }
     function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
 
     function getPrimaryPlanet() {
       return worldState.planets?.[0] ?? null;
     }
+
     function getCorePos() {
       const ship = getMyShip();
       const core = ship?.nodes?.[0];
@@ -143,8 +150,8 @@
       const r = Math.hypot(dx, dy);
 
       const speed = Math.max(1.0, Math.hypot(coreVelEst.vx, coreVelEst.vy));
-
       const T_orbit = 2 * Math.PI * r / speed;
+
       const worldSpan = Math.max(W, H) / cameraZoom;
       const Nscreens = 6;
       const T_view = (Nscreens * worldSpan) / speed;
@@ -174,32 +181,49 @@
       return 250;
     }
 
-    resizeCanvas();
-    window.addEventListener("resize", resizeCanvas);
-
     // 摄像机缩放
     let cameraZoom = 1.0;
     const MIN_ZOOM = 0.002;
     const MAX_ZOOM = 100.0;
 
+    // 键盘状态
     const keys = {};
-    let worldState = { planets: [], ships: [] };
 
+    // ------------------------------
+    // 前端外推预测：统一入口
+    // ------------------------------
+    function predictPose(obj, nowSec) {
+      // ★核心修复：dt 限幅，避免切后台或网络抖动导致“预测瞬移”
+      const dtRaw = nowSec - lastStateArrivedAt;
+      const dt = clamp(dtRaw, 0, 0.25);
+
+      const vx = obj.vx ?? 0;
+      const vy = obj.vy ?? 0;
+      const w  = obj.ang_vel ?? 0;
+
+      return {
+        x: (obj.x ?? 0) + vx * dt,
+        y: (obj.y ?? 0) + vy * dt,
+        angle: (obj.angle ?? 0) + w * dt,
+        radius: obj.radius ?? 0,
+        length: obj.length ?? 0,
+      };
+    }
+
+    // ------------------------------
     // 相机：跟随 / 自由
+    // ------------------------------
     let freeCamera = false;
     let freeCamPos = { x: 0, y: 0 };
     const CAM_SPEED = 900;
 
     function getFollowCenter(nowSec) {
-      let camX = 0, camY = 0;
-      const ship = worldState.ships?.[0];
+      // ★核心修复：必须跟随“我的船”，多人时 ships[0] 经常不是我
+      const ship = getMyShip();
       const core = ship?.nodes?.[0];
-      if (core) {
-        const p = predictPose(core, nowSec);
-        camX = p.x;
-        camY = p.y;
-      }
-      return { x: camX, y: camY };
+      if (!core) return { x: 0, y: 0 };
+      const p = predictPose(core, nowSec);
+      return { x: p.x, y: p.y };
     }
 
     function getCameraCenter(nowSec) {
@@ -218,8 +242,8 @@
       ctx.translate(-cam.x, -cam.y);
     }
 
-    function screenToWorld(sx, sy) {
-      const nowSec = performance.now() / 1000;
+    // ★关键：屏幕->世界 必须用“此刻相机中心”
+    function screenToWorld(sx, sy, nowSec) {
       const cam = getCameraCenter(nowSec);
       const wx = (sx - CX) / cameraZoom + cam.x;
       const wy = -(sy - CY) / cameraZoom + cam.y;
@@ -262,6 +286,7 @@
     let mouseDown = false;
     let mouseDownScreen = { x: 0, y: 0 };
     let pendingPlankStartAnchor = null;
+
     const CLICK_DRAG_THRESHOLD_PX = 6;
     const HOVER_PIXEL_RADIUS = 25;
 
@@ -277,7 +302,7 @@
       return Math.hypot(px - cx, py - cy);
     }
 
-    function findBestAnchorAtWorld(world) {
+    function findBestAnchorAtWorld(world, nowSec) {
       const ship = getMyShip();
       if (!ship) return null;
 
@@ -286,7 +311,8 @@
       let bestDist = Infinity;
 
       (ship.nodes || []).forEach((node, ni) => {
-        const d = Math.hypot(node.x - world.x, node.y - world.y);
+        const p = predictPose(node, nowSec);
+        const d = Math.hypot(p.x - world.x, p.y - world.y);
         if (d < bestDist && d < thresholdWorld) {
           bestDist = d;
           best = { kind: "node", index: ni };
@@ -294,7 +320,8 @@
       });
 
       (ship.engines || []).forEach((eng, ei) => {
-        const d = Math.hypot(eng.x - world.x, eng.y - world.y);
+        const p = predictPose(eng, nowSec);
+        const d = Math.hypot(p.x - world.x, p.y - world.y);
         if (d < bestDist && d < thresholdWorld) {
           bestDist = d;
           best = { kind: "engine", index: ei };
@@ -304,17 +331,18 @@
       return best;
     }
 
-    function findBestDeleteTargetAtWorld(world) {
+    function findBestDeleteTargetAtWorld(world, nowSec) {
       const ship = getMyShip();
       if (!ship) return null;
 
       const thresholdNodeWorld = HOVER_PIXEL_RADIUS / cameraZoom;
 
-      // node
+      // 1) node
       let bestNode = null;
       let bestNodeDist = Infinity;
       (ship.nodes || []).forEach((node, ni) => {
-        const d = Math.hypot(node.x - world.x, node.y - world.y);
+        const p = predictPose(node, nowSec);
+        const d = Math.hypot(p.x - world.x, p.y - world.y);
         if (d < bestNodeDist && d < thresholdNodeWorld) {
           bestNodeDist = d;
           bestNode = { kind: "node", index: ni };
@@ -322,12 +350,13 @@
       });
       if (bestNode) return bestNode;
 
-      // engine
+      // 2) engine
       let bestEng = null;
       let bestEngDist = Infinity;
       (ship.engines || []).forEach((eng, ei) => {
-        const d = Math.hypot(eng.x - world.x, eng.y - world.y);
-        const thresholdEngWorld = Math.max(thresholdNodeWorld, eng.radius * 1.8);
+        const p = predictPose(eng, nowSec);
+        const d = Math.hypot(p.x - world.x, p.y - world.y);
+        const thresholdEngWorld = Math.max(thresholdNodeWorld, (eng.radius ?? 1) * 1.8);
         if (d < bestEngDist && d < thresholdEngWorld) {
           bestEngDist = d;
           bestEng = { kind: "engine", index: ei };
@@ -335,14 +364,15 @@
       });
       if (bestEng) return bestEng;
 
-      // plank
+      // 3) plank
       let bestPlank = null;
       let bestPlankDist = Infinity;
       (ship.planks || []).forEach((pl, pi) => {
-        const hx = Math.cos(pl.angle) * (pl.length / 2);
-        const hy = Math.sin(pl.angle) * (pl.length / 2);
-        const ax = pl.x - hx, ay = pl.y - hy;
-        const bx = pl.x + hx, by = pl.y + hy;
+        const pp = predictPose(pl, nowSec);
+        const hx = Math.cos(pp.angle) * (pl.length / 2);
+        const hy = Math.sin(pp.angle) * (pl.length / 2);
+        const ax = pp.x - hx, ay = pp.y - hy;
+        const bx = pp.x + hx, by = pp.y + hy;
 
         const d = distPointToSegment(world.x, world.y, ax, ay, bx, by);
         const thickness = (pl.radius * 2);
@@ -358,22 +388,27 @@
       return bestPlank;
     }
 
-    function getAnchorWorldPos(anchor) {
+    function getAnchorWorldPos(anchor, nowSec) {
       const ship = getMyShip();
       if (!ship) return null;
-      if (anchor.kind === "node") return ship.nodes?.[anchor.index] ?? null;
-      return ship.engines?.[anchor.index] ?? null;
+      if (anchor.kind === "node") {
+        const n = ship.nodes?.[anchor.index];
+        return n ? predictPose(n, nowSec) : null;
+      }
+      const e = ship.engines?.[anchor.index];
+      return e ? predictPose(e, nowSec) : null;
     }
-    function updateMouseWorldAndHoverPerFrame() {
-      // 用“此刻相机中心”把鼠标屏幕坐标转回世界坐标
-      const world = screenToWorld(mouseScreenPos.x, mouseScreenPos.y);
+
+    function updateMouseWorldAndHoverPerFrame(nowSec) {
+      // ★核心修复：每帧把“鼠标屏幕坐标”用“当前相机中心”转回世界坐标
+      const world = screenToWorld(mouseScreenPos.x, mouseScreenPos.y, nowSec);
       dragWorldPos = world;
 
       const building = buildMode || !!keys["Digit1"];
-      hoverAnchor = building ? findBestAnchorAtWorld(world) : null;
-      hoverDeleteTarget = buildMode ? findBestDeleteTargetAtWorld(world) : null;
+      hoverAnchor = building ? findBestAnchorAtWorld(world, nowSec) : null;
+      hoverDeleteTarget = buildMode ? findBestDeleteTargetAtWorld(world, nowSec) : null;
 
-      // 拖拽阈值判定也最好放这里（相机动时也能触发）
+      // 拖拽阈值判定也放每帧（相机动时仍然可靠）
       if (buildMode && mouseDown && pendingPlankStartAnchor && !isDraggingPlank && !keys["Digit1"]) {
         const dx = mouseScreenPos.x - mouseDownScreen.x;
         const dy = mouseScreenPos.y - mouseDownScreen.y;
@@ -396,7 +431,6 @@
     async function fetchPredict() {
       if (!joined) return;
       if (isPredicting) return;
-
       const ship = getMyShip();
       if (!ship) return;
 
@@ -476,7 +510,8 @@
         e.preventDefault();
         freeCamera = !freeCamera;
         if (freeCamera) {
-          const c = getFollowCenter();
+          const nowSec = performance.now() / 1000;
+          const c = getFollowCenter(nowSec);
           freeCamPos.x = c.x;
           freeCamPos.y = c.y;
         }
@@ -520,24 +555,9 @@
     // ------------------------------
     canvas.addEventListener("mousemove", (e) => {
       const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-
-      mouseScreenPos = { x: mx, y: my };
-
-      const building = buildMode || !!keys["Digit1"];
-      hoverAnchor = building ? findBestAnchorAtWorld(world) : null;
-      hoverDeleteTarget = buildMode ? findBestDeleteTargetAtWorld(world) : null;
-
-      if (buildMode && mouseDown && pendingPlankStartAnchor && !isDraggingPlank && !keys["Digit1"]) {
-        const dx = mx - mouseDownScreen.x;
-        const dy = my - mouseDownScreen.y;
-        if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) {
-          isDraggingPlank = true;
-          plankStartAnchor = pendingPlankStartAnchor;
-          pendingPlankStartAnchor = null;
-        }
-      }
+      mouseScreenPos.x = e.clientX - rect.left;
+      mouseScreenPos.y = e.clientY - rect.top;
+      // ★不在这里算 world/hover：统一交给每帧 updateMouseWorldAndHoverPerFrame（避免相机动造成不一致）
     });
 
     canvas.addEventListener("mousedown", (e) => {
@@ -549,7 +569,9 @@
 
       mouseDown = true;
       mouseDownScreen = { x: mx, y: my };
+      mouseScreenPos = { x: mx, y: my };
 
+      // 注意：此时 hoverAnchor 是上一帧算的，足够稳定（且和画面一致）
       if (keys["Digit1"]) {
         if (hoverAnchor && hoverAnchor.kind === "node") {
           isDraggingEngine = true;
@@ -569,7 +591,10 @@
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-      const world = screenToWorld(mx, my);
+      mouseScreenPos = { x: mx, y: my };
+
+      const nowSec = performance.now() / 1000;
+      const world = screenToWorld(mx, my, nowSec);
 
       // 引擎建造
       if (isDraggingEngine && engineStartNode && joined) {
@@ -590,7 +615,7 @@
 
       // 木板建造
       if (isDraggingPlank && plankStartAnchor && joined) {
-        const best = findBestAnchorAtWorld(world);
+        const best = findBestAnchorAtWorld(world, nowSec);
         let payload = null;
 
         if (!best) {
@@ -626,7 +651,7 @@
 
       // 点击选中删除目标
       if (buildMode && !keys["Digit1"] && !isDraggingPlank && !isDraggingEngine) {
-        selectedTarget = findBestDeleteTargetAtWorld(world);
+        selectedTarget = findBestDeleteTargetAtWorld(world, nowSec);
       }
 
       mouseDown = false;
@@ -642,8 +667,7 @@
     // ------------------------------
     // 绘制
     // ------------------------------
-    function drawWorld() {
-      const nowSec = performance.now() / 1000;
+    function drawWorld(nowSec) {
       applyCameraTransform(nowSec);
 
       drawPredictedTrajectory();
@@ -667,16 +691,17 @@
 
         // planks
         (ship.planks || []).forEach((pl, pi) => {
+          const pp = predictPose(pl, nowSec);
+
           const isHoverDel = isMine && hoverDeleteTarget && hoverDeleteTarget.kind === "plank" && hoverDeleteTarget.index === pi;
           const isSelected = isMine && selectedTarget && selectedTarget.kind === "plank" && selectedTarget.index === pi;
 
-          const pp = predictPose(pl, nowSec);
           ctx.save();
           ctx.translate(pp.x, pp.y);
           ctx.rotate(pp.angle);
 
           ctx.strokeStyle = isSelected ? "#f00" : (isHoverDel ? "#0f0" : colPlank);
-          ctx.lineWidth = pl.radius * 2 / cameraZoom;
+          ctx.lineWidth = (pl.radius * 2) / cameraZoom;
 
           ctx.beginPath();
           ctx.moveTo(-pl.length / 2, 0);
@@ -688,23 +713,23 @@
 
         // nodes
         (ship.nodes || []).forEach((n, ni) => {
+          const pn = predictPose(n, nowSec);
+
           const isHoverBuild = isMine && hoverAnchor && hoverAnchor.kind === "node" && hoverAnchor.index === ni;
           const isHoverDel   = isMine && hoverDeleteTarget && hoverDeleteTarget.kind === "node" && hoverDeleteTarget.index === ni;
           const isSelected   = isMine && selectedTarget && selectedTarget.kind === "node" && selectedTarget.index === ni;
 
-          const pn = predictPose(n, nowSec);
           ctx.beginPath();
           ctx.arc(pn.x, pn.y, n.radius, 0, Math.PI * 2);
 
           if (isSelected) ctx.fillStyle = "#f00";
           else if (isHoverDel || isHoverBuild) ctx.fillStyle = "#0f0";
           else ctx.fillStyle = colNode;
-
           ctx.fill();
 
           if (isHoverDel || isSelected) {
             ctx.beginPath();
-            ctx.arc(n.x, n.y, n.radius * 1.8, 0, Math.PI * 2);
+            ctx.arc(pn.x, pn.y, n.radius * 1.8, 0, Math.PI * 2);
             ctx.strokeStyle = isSelected ? "#f00" : "#0f0";
             ctx.lineWidth = 1.0 / cameraZoom;
             ctx.stroke();
@@ -713,19 +738,22 @@
 
         // engines
         (ship.engines || []).forEach((e, ei) => {
+          const pe = predictPose(e, nowSec);
+
           const isHoverBuild = isMine && hoverAnchor && hoverAnchor.kind === "engine" && hoverAnchor.index === ei;
           const isHoverDel   = isMine && hoverDeleteTarget && hoverDeleteTarget.kind === "engine" && hoverDeleteTarget.index === ei;
           const isSelected   = isMine && selectedTarget && selectedTarget.kind === "engine" && selectedTarget.index === ei;
 
-          const pe = predictPose(e, nowSec);
           ctx.save();
           ctx.translate(pe.x, pe.y);
           ctx.rotate(pe.angle);
 
+          ctx.fillStyle = isSelected ? "#f00" : (isHoverDel ? "#0f0" : (isHoverBuild ? "#ff0" : colEng));
           ctx.beginPath();
           ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
           ctx.fill();
 
+          // 推力方向：+x
           ctx.strokeStyle = "#fff";
           ctx.lineWidth = 0.5 / cameraZoom;
           ctx.beginPath();
@@ -733,6 +761,7 @@
           ctx.lineTo(3 * e.radius, 0);
           ctx.stroke();
 
+          // 火焰：-x
           if (ship.on_fire) {
             ctx.fillStyle = isMine ? "#ff8800" : "#663300";
             ctx.beginPath();
@@ -760,19 +789,19 @@
           ctx.restore();
         });
 
-        // ship_angle arrow
+        // ship_angle arrow（用预测的 core）
         if (ship.nodes && ship.nodes.length > 0 && typeof ship.ship_angle === "number") {
-          const core = ship.nodes[0];
+          const coreP = predictPose(ship.nodes[0], nowSec);
           const ang = ship.ship_angle;
           const L = 30;
 
-          const ex = core.x + Math.cos(ang) * L;
-          const ey = core.y + Math.sin(ang) * L;
+          const ex = coreP.x + Math.cos(ang) * L;
+          const ey = coreP.y + Math.sin(ang) * L;
 
           ctx.strokeStyle = colArrow;
           ctx.lineWidth = 1.5 / cameraZoom;
           ctx.beginPath();
-          ctx.moveTo(core.x, core.y);
+          ctx.moveTo(coreP.x, coreP.y);
           ctx.lineTo(ex, ey);
           ctx.stroke();
 
@@ -788,9 +817,9 @@
         }
       });
 
-      // 建造模式：虚拟木板
+      // 建造模式：虚拟木板（起点也用预测的位置，保证“看见哪里就是哪里”）
       if (buildMode && isDraggingPlank && plankStartAnchor) {
-        const s = getAnchorWorldPos(plankStartAnchor);
+        const s = getAnchorWorldPos(plankStartAnchor, nowSec);
         if (s) {
           ctx.strokeStyle = "#0f0";
           ctx.setLineDash([5 / cameraZoom, 5 / cameraZoom]);
@@ -803,11 +832,13 @@
         }
       }
 
-      // 引擎建造预览
+      // 引擎建造预览（起点用预测 node）
       if (isDraggingEngine && engineStartNode) {
         const ship = getMyShip();
         if (ship && ship.nodes) {
-          const s = ship.nodes[engineStartNode.index];
+          const s0 = ship.nodes[engineStartNode.index];
+          const s = predictPose(s0, nowSec);
+
           const dx = dragWorldPos.x - s.x;
           const dy = dragWorldPos.y - s.y;
           const len = Math.hypot(dx, dy);
@@ -822,7 +853,7 @@
             let radius = len * ENGINE_LEN2R;
             radius = Math.max(ENGINE_MIN_R, Math.min(ENGINE_MAX_R, radius));
 
-            const offset = s.radius + radius + 2.0;
+            const offset = (s0.radius ?? 1) + radius + 2.0;
             const ex = s.x + dirx * offset;
             const ey = s.y + diry * offset;
 
@@ -845,12 +876,12 @@
       }
     }
 
-    function drawHUD() {
+    function drawHUD(nowSec) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.font = "14px monospace";
       ctx.fillStyle = "#0f0";
 
-      ctx.fillText(`uid: ${myUid ? myUid.slice(0, 8) + "..." : "(joining)" }  ship_id: ${myShipId ?? "-"}`, 10, H - 100);
+      ctx.fillText(`uid: ${myUid ? myUid.slice(0, 8) + "..." : "(joining)"}  ship_id: ${myShipId ?? "-"}`, 10, H - 100);
 
       const ship = getMyShip();
       if (ship) {
@@ -859,7 +890,7 @@
         ctx.fillText(`stabilize: ${ship.stabilize ? "ON" : "OFF"}`, 10, H - 64);
       }
 
-      const cam = getCameraCenter();
+      const cam = getCameraCenter(nowSec);
       ctx.fillText(`camera: ${freeCamera ? "FREE(Tab)" : "FOLLOW"}  pos: (${cam.x.toFixed(1)}, ${cam.y.toFixed(1)})  zoom:${cameraZoom.toFixed(2)}`, 10, H - 46);
 
       const sel = selectedTarget ? (selectedTarget.kind + "#" + selectedTarget.index) : "none";
@@ -885,13 +916,6 @@
         }
       } catch (e) {}
     }
-    function predictPose(obj, nowSec) {
-      const dt = nowSec - lastStateArrivedAt;
-      const x = obj.x + (obj.vx ?? 0) * dt;
-      const y = obj.y + (obj.vy ?? 0) * dt;
-      const angle = obj.angle + (obj.ang_vel ?? 0) * dt;
-      return { x, y, angle };
-    }
 
     function sendControl() {
       if (!joined) return;
@@ -900,6 +924,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           uid: myUid,
+          ship_id: myShipId,
           fire: !!keys["Space"],
           left: !!keys["ArrowLeft"],
           right: !!keys["ArrowRight"],
@@ -917,10 +942,13 @@
       const dt = Math.min(0.05, (now - lastFrameT) / 1000);
       lastFrameT = now;
 
+      const nowSec = now / 1000;
+
       updateFreeCamera(dt);
-      updateMouseWorldAndHoverPerFrame();
-      drawWorld();
-      drawHUD();
+      updateMouseWorldAndHoverPerFrame(nowSec);
+
+      drawWorld(nowSec);
+      drawHUD(nowSec);
 
       requestAnimationFrame(draw);
     }
