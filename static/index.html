@@ -68,6 +68,13 @@
         // 后端 state 到达时间戳（用于前端外推预测）
         let lastStateArrivedAt = performance.now() / 1000;
 
+        function planetPosition(planet, dt = performance.now() / 1000 - lastStateArrivedAt) {
+            return {
+                x: planet.x + planet.vx * dt,
+                y: planet.y + planet.vy * dt
+            };
+        }
+
         async function joinGame() {
             const res = await fetch("/api/join", { method: "POST" });
             const data = await res.json();
@@ -78,6 +85,7 @@
         }
 
         let worldState = { planets: [], ships: [] };
+        let worldPivot = 0;
 
         function getMyShip() {
             if (!worldState.ships) return null;
@@ -427,7 +435,6 @@
         let predictedMeta = null;
         let isPredicting = false;
         let lastPredictAt = 0;
-        let predictPivot = 0;
 
         async function fetchPredict() {
             if (!joined) return;
@@ -453,7 +460,7 @@
                     body: JSON.stringify({
                         uid: myUid, ship_id: myShipId,
                         seconds, dt, stride, mode,
-                        pivot: predictPivot
+                        pivot: worldPivot
                     }),
                 });
                 if (!res.ok) return;
@@ -478,6 +485,7 @@
 
             const n = predictedPoints.length;
             const seg = 6;
+            const pivotPoint = planetPosition(worldState.planets[worldPivot]);
             for (let i = 0; i < n - 1; i += seg) {
                 const jEnd = Math.min(n - 1, i + seg);
                 const t = i / (n - 1);
@@ -485,8 +493,8 @@
                 ctx.globalAlpha = alpha;
 
                 ctx.beginPath();
-                ctx.moveTo(predictedPoints[i].x, predictedPoints[i].y);
-                for (let j = i + 1; j <= jEnd; j++) ctx.lineTo(predictedPoints[j].x, predictedPoints[j].y);
+                ctx.moveTo(pivotPoint.x + predictedPoints[i].x, pivotPoint.y + predictedPoints[i].y);
+                for (let j = i + 1; j <= jEnd; j++) ctx.lineTo(pivotPoint.x + predictedPoints[j].x, pivotPoint.y + predictedPoints[j].y);
                 ctx.stroke();
             }
             ctx.restore();
@@ -499,7 +507,7 @@
                 ctx.globalAlpha = 0.45 * (1.0 - t) + 0.08;
                 const pt = predictedPoints[i];
                 ctx.beginPath();
-                ctx.arc(pt.x, pt.y, 1.8 / cameraZoom, 0, Math.PI * 2);
+                ctx.arc(pivotPoint.x + pt.x, pivotPoint.y + pt.y, 1.8 / cameraZoom, 0, Math.PI * 2);
                 ctx.fill();
             }
             ctx.restore();
@@ -550,15 +558,15 @@
                             .catch((err) => console.error("删除请求错误", err));
                     }
                     break;
-                
+
                 case "Minus":
-                    if (--predictPivot < 0)
-                        predictPivot += worldState.planets.length;
+                    if (--worldPivot < 0)
+                        worldPivot += worldState.planets.length;
                     break;
-                
+
                 case "Equal":
-                    if (++predictPivot >= worldState.planets.length)
-                        predictPivot -= worldState.planets.length;
+                    if (++worldPivot >= worldState.planets.length)
+                        worldPivot -= worldState.planets.length;
                     break;
             }
         });
@@ -691,9 +699,10 @@
 
             // 行星
             for (const p of (worldState.planets || [])) {
+                const p1 = planetPosition(p);
                 ctx.fillStyle = "#222";
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.arc(p1.x, p1.y, p.radius, 0, Math.PI * 2);
                 ctx.fill();
             }
 
@@ -913,11 +922,10 @@
             const sel = selectedTarget ? (selectedTarget.kind + "#" + selectedTarget.index) : "none";
             ctx.fillText(`buildMode: ${buildMode ? "ON" : "OFF"}  selected: ${sel}`, 10, H - 28);
 
-            if (predictedMeta) {
+            if (predictedMeta)
                 ctx.fillText(`predict: ${predictedMeta.mode}  pts:${predictedPoints.length}  sec:${predictedMeta.seconds}s  dt:${predictedMeta.dt}`, 10, H - 10);
-            } else {
+            else
                 ctx.fillText(`predict: (waiting...)`, 10, H - 10);
-            }
         }
 
         // ------------------------------

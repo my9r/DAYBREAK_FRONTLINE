@@ -382,10 +382,10 @@ def init_world():
     Moon_M=g_Moon*R_Moon**2/G
     moon = Planet(mass=Moon_M, R=R_Moon, name="moon")
     Planets.append(moon)
-    omega=np.sqrt(G*(planet_M+Moon_M)/(E2R_Moon**3))
-    v=omega*E2R_Moon
-    moon.body.position=(E2R_Moon,0)
-    moon.body.velocity=(0,v)
+    omega = np.sqrt(G * (planet_M + Moon_M) / (E2R_Moon ** 3))
+    v=omega * E2R_Moon
+    moon.body.position=(E2R_Moon, 0)
+    moon.body.velocity=(0, v)
 
 
 def create_ship_for_player(owner_uid: str) -> Ship:
@@ -852,9 +852,6 @@ def api_predict():
                 "pos": [float(p.body.position.x), float(p.body.position.y)],
                 "vel": [float(p.body.velocity.x), float(p.body.velocity.y)],
             })
-    
-    origx = planets[pivot]["pos"][0]
-    origy = planets[pivot]["pos"][1]
 
     # --- 锁外：轻量积分 ---
     G0 = float(G)
@@ -886,8 +883,6 @@ def api_predict():
             if r2 < 1e-12:
                 continue
             r = math.sqrt(r2)
-            if r < planets[j]["radius"]:
-                raise RuntimeError("planet collision in prediction!")
             inv_r3 = 1.0 / (r2 * r)
             a = G0 * mj * inv_r3
             ax += dx * a
@@ -905,10 +900,9 @@ def api_predict():
             if r2 < 1e-12:
                 continue
             r = math.sqrt(r2)
-            eff_r = max(r, pl["radius"])
-            eff_r2 = eff_r * eff_r
-            eff_r3 = eff_r2 * eff_r
-            a = G0 * pl["mass"] / eff_r3
+            if r < pl["radius"]:
+                raise RuntimeError("collision with planet")
+            a = G0 * pl["mass"] / (r2 * r)
             ax += dx * a
             ay += dy * a
         return ax, ay
@@ -921,8 +915,8 @@ def api_predict():
     for step in range(steps + 1):
         if step % stride == 0:
             points.append({
-                "x": float(sx) + origx - float(planets[pivot]["pos"][0]),
-                "y": float(sy) + origy - float(planets[pivot]["pos"][1])
+                "x": float(sx) - float(planets[pivot]["pos"][0]),
+                "y": float(sy) - float(planets[pivot]["pos"][1])
             })
 
         # 1) 行星自己动（如果你不想要月球跑，就把这段注释掉）
