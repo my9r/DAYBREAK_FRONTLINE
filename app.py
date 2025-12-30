@@ -810,7 +810,7 @@ def api_delete():
 def api_predict():
     """
     超轻量预测：只考虑“自己飞船的 core”和“行星引力”
-    { uid, ship_id, seconds, dt, mode, stride }
+    { uid, ship_id, seconds, dt, mode, stride, pivot }
     mode:
       - "ballistic" / "ballistic_fast": 默认使用轻量预测
       - "current": 你如果以后要加推力预测再说（这里先当 ballistic 处理）
@@ -825,6 +825,7 @@ def api_predict():
     dt = float(data.get("dt", 1.0 / 60.0))
     mode = str(data.get("mode", "ballistic")).lower()
     stride = int(data.get("stride", 2))
+    pivot = int(data.get("pivot", 0))
     if stride < 1:
         stride = 1
 
@@ -849,6 +850,9 @@ def api_predict():
                 "pos": [float(p.body.position.x), float(p.body.position.y)],
                 "vel": [float(p.body.velocity.x), float(p.body.velocity.y)],
             })
+    
+    origx = planets[pivot]["pos"][0]
+    origy = planets[pivot]["pos"][1]
 
     # --- 锁外：轻量积分 ---
     G0 = float(G)
@@ -912,7 +916,10 @@ def api_predict():
     points: list[dict[str, float]] = []
     for step in range(steps + 1):
         if step % stride == 0:
-            points.append({"x": float(sx), "y": float(sy)})
+            points.append({
+                "x": float(sx) + origx - float(planets[pivot]["pos"][0]),
+                "y": float(sy) + origy - float(planets[pivot]["pos"][1])
+            })
 
         # 1) 行星自己动（如果你不想要月球跑，就把这段注释掉）
         # 半隐式：v += a*dt; x += v*dt

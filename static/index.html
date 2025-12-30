@@ -427,6 +427,7 @@
         let predictedMeta = null;
         let isPredicting = false;
         let lastPredictAt = 0;
+        let predictPivot = 0;
 
         async function fetchPredict() {
             if (!joined) return;
@@ -449,7 +450,11 @@
                 const res = await fetch("/api/predict", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ uid: myUid, ship_id: myShipId, seconds, dt, stride, mode }),
+                    body: JSON.stringify({
+                        uid: myUid, ship_id: myShipId,
+                        seconds, dt, stride, mode,
+                        pivot: predictPivot
+                    }),
                 });
                 if (!res.ok) return;
 
@@ -506,43 +511,55 @@
         window.addEventListener("keydown", (e) => {
             keys[e.code] = true;
 
-            if (e.code === "Tab") {
-                e.preventDefault();
-                freeCamera = !freeCamera;
-                if (freeCamera) {
-                    const nowSec = performance.now() / 1000;
-                    const c = getFollowCenter(nowSec);
-                    freeCamPos.x = c.x;
-                    freeCamPos.y = c.y;
-                }
-                return;
-            }
-
-            if (e.code === "KeyB") {
-                buildMode = !buildMode;
-                hoverDeleteTarget = null;
-                if (!buildMode) selectedTarget = null;
-            }
-
-            if ((e.code === "Delete" || e.code === "Backspace") && buildMode) {
-                if (selectedTarget && joined) {
+            switch (e.code) {
+                case "Tab":
                     e.preventDefault();
-                    fetch("/api/delete", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            uid: myUid,
-                            ship_id: myShipId,
-                            target: { type: selectedTarget.kind, index: selectedTarget.index },
-                        }),
-                    })
-                        .then((res) => res.json())
-                        .then((data) => {
-                            if (!data.ok) console.error("删除失败", data.error);
-                            else selectedTarget = null;
+                    freeCamera = !freeCamera;
+                    if (freeCamera) {
+                        const nowSec = performance.now() / 1000;
+                        const c = getFollowCenter(nowSec);
+                        freeCamPos.x = c.x;
+                        freeCamPos.y = c.y;
+                    }
+                    break;
+
+                case "KeyB":
+                    buildMode = !buildMode;
+                    hoverDeleteTarget = null;
+                    if (!buildMode) selectedTarget = null;
+                    break;
+
+                case "Delete":
+                case "Backspace":
+                    if (buildMode && selectedTarget && joined) {
+                        e.preventDefault();
+                        fetch("/api/delete", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                uid: myUid,
+                                ship_id: myShipId,
+                                target: { type: selectedTarget.kind, index: selectedTarget.index },
+                            }),
                         })
-                        .catch((err) => console.error("删除请求错误", err));
-                }
+                            .then((res) => res.json())
+                            .then((data) => {
+                                if (!data.ok) console.error("删除失败", data.error);
+                                else selectedTarget = null;
+                            })
+                            .catch((err) => console.error("删除请求错误", err));
+                    }
+                    break;
+                
+                case "Minus":
+                    if (--predictPivot < 0)
+                        predictPivot += worldState.planets.length;
+                    break;
+                
+                case "Equal":
+                    if (++predictPivot >= worldState.planets.length)
+                        predictPivot -= worldState.planets.length;
+                    break;
             }
         });
 
