@@ -455,7 +455,6 @@
 
             const now = performance.now();
             if (now - lastPredictAt < cooldown) return;
-            lastPredictAt = now;
 
             const mode = "ballistic";
 
@@ -479,6 +478,7 @@
                 }
             } catch (e) {
             } finally {
+                lastPredictAt = now;
                 isPredicting = false;
             }
         }
@@ -490,18 +490,42 @@
             ctx.lineWidth = 1.2 / cameraZoom;
             ctx.strokeStyle = "#0f0";
 
+            const prog = (performance.now() - lastPredictAt) / (1200/* waitwaitwait why???? */ * predictedMeta.dt * predictedMeta.stride);
+            const start = Math.floor(prog);
             const n = predictedPoints.length;
             const seg = 6;
             const pivotPoint = planetPosition(worldState.planets[worldPivot]);
-            for (let i = 0; i < n - 1; i += seg) {
+
+            function getPoint(i) {
+                return i < 0 ? predictedPoints[0] : i < n ? predictedPoints[i] : predictedPoints[n - 1];
+            }
+
+            function interpolate(i) {
+                const i0 = Math.floor(i);
+                const v = i - i0;
+                const u = 1 - v;
+                const p0 = getPoint(i0);
+                const p1 = getPoint(i0 + 1);
+                return {
+                    x: p0.x * u + p1.x * v,
+                    y: p0.y * u + p1.y * v
+                };
+            }
+
+            for (let i = start; i < n - 1; i += seg) {
                 const jEnd = Math.min(n - 1, i + seg);
                 const t = i / (n - 1);
                 const alpha = 0.75 * (1.0 - t) + 0.10;
                 ctx.globalAlpha = alpha;
 
                 ctx.beginPath();
-                ctx.moveTo(pivotPoint.x + predictedPoints[i].x, pivotPoint.y + predictedPoints[i].y);
-                for (let j = i + 1; j <= jEnd; j++) 
+                if (i == start) {
+                    const {x, y} = interpolate(prog);
+                    ctx.moveTo(pivotPoint.x + x, pivotPoint.y + y);
+                }
+                else
+                    ctx.moveTo(pivotPoint.x + predictedPoints[i].x, pivotPoint.y + predictedPoints[i].y);
+                for (let j = i + 1; j <= jEnd; j++)
                     ctx.lineTo(pivotPoint.x + predictedPoints[j].x, pivotPoint.y + predictedPoints[j].y);
                 ctx.stroke();
             }
@@ -510,12 +534,12 @@
             ctx.save();
             ctx.fillStyle = "#0f0";
             const step = 25;
-            for (let i = step; i < n; i += step) {
+            for (let i = step; i < n - start; i += step) {
                 const t = i / (n - 1);
                 ctx.globalAlpha = 0.45 * (1.0 - t) + 0.08;
-                const pt = predictedPoints[i];
+                const {x, y} = interpolate(prog + i);
                 ctx.beginPath();
-                ctx.arc(pivotPoint.x + pt.x, pivotPoint.y + pt.y, 1.8 / cameraZoom, 0, Math.PI * 2);
+                ctx.arc(pivotPoint.x + x, pivotPoint.y + y, 1.8 / cameraZoom, 0, Math.PI * 2);
                 ctx.fill();
             }
             ctx.restore();

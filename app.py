@@ -894,7 +894,7 @@ def api_predict():
         return ax, ay
 
     def ship_acc_from_planets(x: float, y: float):
-        """core 在 (x,y) 处受到行星引力的加速度 (ax, ay)，用 eff_r=max(dist,R) 做软化"""
+        """core 在 (x,y) 处受到行星引力的加速度 (ax, ay)"""
         ax = ay = 0.0
         for pl in planets:
             px, py = pl["pos"]
@@ -926,8 +926,8 @@ def api_predict():
         # 1) 行星自己动（如果你不想要月球跑，就把这段注释掉）
         # 半隐式：v += a*dt; x += v*dt
         # 行星数量通常很少，这点开销几乎等于 0
-        p_acc = [planet_planet_acc(i) for i in range(len(planets))]
-        for i, (ax, ay) in enumerate(p_acc):
+        for i in range(len(planets)):
+            ax, ay = planet_planet_acc(i)
             planets[i]["vel"][0] += ax * dt
             planets[i]["vel"][1] += ay * dt
         for i in range(len(planets)):
