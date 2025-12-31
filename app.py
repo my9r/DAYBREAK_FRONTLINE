@@ -213,6 +213,29 @@ class Ship:
     def core(self) -> Node:
         return self.nodes[0]
 
+    def mass(self) -> float:
+        return sum((node.body.mass for node in self.nodes),
+                   start=sum((eng.body.mass for eng in self.engis),
+                             start=sum(plank.body.mass for plank in self.planks)))
+
+    def weighted_position(self) -> Vec2d:
+        return sum((node.body.mass * node.body.position for node in self.nodes),
+                   start=sum((eng.body.mass * eng.body.position for eng in self.engis),
+                             start=sum((plank.body.mass * plank.body.position for plank in self.planks),
+                                       start=Vec2d(0, 0))))
+
+    def center_of_mass(self) -> Vec2d:
+        return self.weighted_position() / self.mass()
+
+    def momentum(self) -> Vec2d:
+        return sum((node.body.mass * node.body.velocity for node in self.nodes),
+                   start=sum((eng.body.mass * eng.body.velocity for eng in self.engis),
+                             start=sum((plank.body.mass * plank.body.velocity for plank in self.planks),
+                                       start=Vec2d(0, 0))))
+
+    def com_velocity(self) -> Vec2d:
+        return self.momentum() / self.mass()
+
 
 Ships: List[Ship] = []
 ShipsByUid: Dict[str, Ship] = {}
@@ -841,10 +864,9 @@ def api_predict():
         if ship is None or ship.id != req_ship_id:
             return jsonify({"ok": False, "error": "permission denied"}), 403
 
-        # core 的状态（只要它）
-        core = ship.core.body
-        core_pos = (float(core.position.x), float(core.position.y))
-        core_vel = (float(core.velocity.x), float(core.velocity.y))
+        # 质心的状态
+        core_pos = ship.center_of_mass()
+        core_vel = ship.com_velocity()
 
         # 行星快照（质量/半径/位置/速度）
         planets: list[dict[str, Any]] = []
@@ -934,7 +956,7 @@ def api_predict():
             planets[i]["pos"][0] += planets[i]["vel"][0] * dt
             planets[i]["pos"][1] += planets[i]["vel"][1] * dt
 
-        # 2) 飞船 core 在行星引力下动
+        # 2) 飞船质心在行星引力下动
         try:
             ax, ay = ship_acc_from_planets(sx, sy)
         except RuntimeError:
