@@ -26,3 +26,5 @@ if __name__ == "__main__":
         p = Process(target=test_website_pressure, args=(url, requests_per_process),daemon=True)
         processes.append(p)
         p.start()
+    while(1):
+        pass
